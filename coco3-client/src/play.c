@@ -1,0 +1,647 @@
+#include "gime.h"
+#include "palette.h"
+#include "tiles.h"
+#include "ram.h"
+#include "display.h"
+#include "host.h"
+#include "identity.h"
+#include "live.h"
+#include "player.h"
+#include "controls.h"
+#include "hwscroll.h"
+#include "prefs.h"
+#include "hud.h"
+#include "ovl_api.h"
+#include "rt_state.h"
+#include <coco.h>
+#include <cmoc.h>
+
+/* The game (stage 2). Launched by setup.c once a login exists: reads the
+ * saved identity, display target and host from their appkeys, attaches to the
+ * realtime server (which streams the terrain in-band), and plays. Kept free
+ * of login, bootstrap and printf code. */
+
+/* Border color doubles as the Phase 2 on-screen readout: dark green for
+ * 512K/double-buffered, red for 128K/single-buffered. $FF9A takes a
+ * direct 6-bit hardware color code (0-63), NOT an index into
+ * coco_clut[]'s slot numbers -- these are the raw codes the overworld
+ * CLUT happens to hold at slots 15 and 11 (see palette.c). */
+#define BORDER_512K 2  /* dark green -- coco_clut[PALETTE_ID_OVERWORLD][*][15] */
+#define BORDER_128K 36 /* red -- coco_clut[PALETTE_ID_OVERWORLD][*][11] */
+#define BORDER_LOST 63 /* white: the server has gone quiet */
+
+/* Walk cadence: ticks a held direction waits between steps. The Atari's
+ * presets; V cycles them. */
+#define WALK_PRESETS 5
+#define DEFAULT_WALK 1
+static const unsigned char walk_ticks[WALK_PRESETS] = { 6, 8, 10, 12, 15 };
+
+/* PLAYER_STATE goes out at least this often (Atari NET_REALTIME_SEND_DELAY = 4
+ * jiffies), and at once after a predicted step or a shot. The Lynx and
+ * Intellivision use a 15-frame bare heartbeat, which suits their slower links. */
+#define SEND_TICKS 4
+
+/* Ticks between a shot's steps (Atari BULLET_DELAY = 3). */
+#define BULLET_TICKS 3
+#define WORLD_WAIT_TICKS 1200
+
+static const unsigned char black_clut[16];
+static unsigned char f1_was_down;
+static unsigned char g_is_512k;
+static unsigned char g_display_target;
+static unsigned char g_palette_id;
+static unsigned char g_hud_owed;
+static unsigned char g_border;
+static unsigned char g_hw;          /* hardware-scroll renderer active */
+static unsigned char clear_was_down;
+static unsigned char window_key_was; /* OVL_* + 1 of the key held, or 0 */
+static unsigned g_ovl_send_clk;
+static unsigned long g_token;
+static unsigned char g_items_saved;
+
+static void apply_palette(void)
+{
+    gime_set_palette(coco_clut[g_palette_id][g_display_target]);
+}
+
+/* F1 is the dedicated in-game display-target toggle key (no options/
+ * pause screen exists anywhere in this codebase to put it on instead).
+ * Only the palette needs reapplying -- tile data references palette
+ * indices, not raw colors, so no redraw is needed either RAM path. */
+static void check_display_toggle(void)
+{
+    unsigned char down = isKeyPressed(KEY_PROBE_F1, KEY_BIT_F1) ? 1 : 0;
+
+    if (down && !f1_was_down) {
+        g_display_target = display_target_toggle();
+        apply_palette();
+        hud_note(g_display_target == DISPLAY_COMPOSITE ? "CMP" : "RGB",
+                 getTimer());
+    }
+    f1_was_down = down;
+}
+
+static void set_border(unsigned char code)
+{
+    g_border = code;
+    *(unsigned char *)0xFF9A = code;
+}
+
+/* Brings the screen up to date with the renderer in use (mode: HW_PRESENT_*;
+ * the redraw renderer repaints everything regardless). */
+static void present(unsigned char mode)
+{
+    if (g_hw) {
+        hw_present(live_terrain.tiles, live_terrain.origin_x,
+                   live_terrain.origin_y, view_x, view_y, player_x, player_y,
+                   &live_game, mode);
+        return;
+    }
+    draw_world(live_terrain.tiles, live_terrain.origin_x, live_terrain.origin_y,
+               (unsigned char)(view_x - live_terrain.origin_x),
+               (unsigned char)(view_y - live_terrain.origin_y), player_x,
+               player_y, &live_game);
+    if (g_hud_owed != 0) {
+        hud_blit(0);
+        --g_hud_owed;
+    }
+    gime_flip_display();
+}
+
+/* CLEAR toggles the hardware-scroll renderer and saves the choice (appkey 4).
+ * The redraw renderer is the fallback if the hardware path misbehaves; a 128K
+ * machine has no room for the virtual screen and always uses it. */
+/* BREAK leaves the game for BASIC's OK prompt: a warm start through the
+ * reset vector, like the RESET button (restores text mode and the palette,
+ * keeps memory, does not rerun AUTOEXEC). The loaded program overwrote the
+ * BASIC program area, so that is emptied first, as NEW does. */
+static void check_exit(void)
+{
+    unsigned txttab;
+
+    if (!isKeyPressed(KEY_PROBE_BREAK, KEY_BIT_BREAK)) {
+        return;
+    }
+    live_close();
+    if (g_hw) {
+        hw_leave();
+    }
+    *(unsigned char *)0xFF98 = 0; /* graphics mode off */
+    txttab = *(unsigned *)0x19;
+    *(unsigned *)txttab = 0;
+    *(unsigned *)0x1B = txttab + 2; /* VARTAB */
+    *(unsigned *)0x1D = txttab + 2; /* ARYTAB */
+    *(unsigned *)0x1F = txttab + 2; /* ARYEND */
+    asm {
+        orcc #$50
+        jmp [$FFFE]
+    }
+}
+
+/* The renderers' code is saved at startup and put back after each overlay
+ * window. On 128K, block 6 is BASIC's 80-column screen, so the save goes in
+ * the tail of the HUD block, which only fits redraw.c: hwscroll.c is never
+ * used on 128K. */
+#define SAVE_BLOCK_512K 6
+#define SAVE_BLOCK_128K 7
+#define SAVE_OFS_128K 0x1500
+#define COPY_CHUNK 512
+
+static unsigned region_len(void)
+{
+    return (unsigned)ovl_region_end - (unsigned)ovl_region_start;
+}
+
+/* Copies len bytes between low memory and block at ofs, a chunk per
+ * bracket so interrupts are not held off for long. */
+static void block_copy(unsigned char *low, unsigned char block, unsigned ofs,
+                       unsigned len, unsigned char to_block)
+{
+    unsigned n;
+
+    *(unsigned char *)0xFFAC = block;
+    while (len != 0) {
+        n = len;
+        if (n > COPY_CHUNK) {
+            n = COPY_CHUNK;
+        }
+        GFX_ENTER();
+        if (to_block) {
+            memcpy(GFX_WINDOW + ofs, low, n);
+        } else {
+            memcpy(low, GFX_WINDOW + ofs, n);
+        }
+        GFX_LEAVE();
+        low += n;
+        ofs += n;
+        len -= n;
+    }
+}
+
+static void region_save(unsigned char to_block)
+{
+    unsigned char *region = (unsigned char *)ovl_region_start;
+    unsigned len = region_len();
+
+    if (g_is_512k) {
+        block_copy(region, SAVE_BLOCK_512K, 0, len, to_block);
+    } else {
+        if (len > GFX_BLOCK_BYTES - SAVE_OFS_128K) {
+            len = GFX_BLOCK_BYTES - SAVE_OFS_128K;
+        }
+        block_copy(region, SAVE_BLOCK_128K, SAVE_OFS_128K, len, to_block);
+    }
+}
+
+static void ovl_service(void)
+{
+    unsigned now = getTimer();
+
+    live_pump();
+    if ((unsigned)(now - g_ovl_send_clk) >= SEND_TICKS) {
+        g_ovl_send_clk = now;
+        live_send_state(live_facing, 0);
+    }
+    live_service();
+}
+
+static void ovl_clear(void)
+{
+    unsigned char row;
+
+    for (row = 0; row < PLAYFIELD_ROWS; ++row) {
+        GFX_ENTER();
+        memset(GFX_WINDOW + (unsigned)row * TILE_ROW_BYTES, 0, TILE_ROW_BYTES);
+        GFX_LEAVE();
+    }
+}
+
+static void ovl_show(void)
+{
+    gime_flip_display();
+    apply_palette();
+}
+
+static struct ovl_api g_ovl_api;
+
+/* Runs an overlay window over the playfield, then restores the renderers. */
+static void run_overlay(unsigned char which)
+{
+    struct ovl_header hdr;
+    struct controls drain;
+    unsigned char *region = (unsigned char *)ovl_region_start;
+    unsigned char (*entry)(const struct ovl_api *, unsigned char);
+
+    block_copy((unsigned char *)&hdr, OVL_BLOCK, 0, sizeof(hdr), 0);
+    if (hdr.magic[0] != OVL_MAGIC0 || hdr.magic[1] != OVL_MAGIC1 ||
+        hdr.load != (unsigned)region || hdr.len > region_len()) {
+        return;
+    }
+    /* Everything until the window's first show() happens unseen. */
+    gime_set_palette(black_clut);
+    if (g_hw) {
+        hw_leave(); /* before the copy: it lives in the region */
+    }
+    gime_select_buffers(g_is_512k);
+    ovl_clear();
+    hud_blit(1);
+    block_copy(region, OVL_BLOCK, sizeof(hdr), hdr.len, 0);
+    memset(region + hdr.len, 0, region_len() - hdr.len);
+    gime_window_playfield();
+
+    g_ovl_api.service = ovl_service;
+    g_ovl_api.clear = ovl_clear;
+    g_ovl_api.text = text_draw;
+    g_ovl_api.show = ovl_show;
+    g_ovl_api.is_512k = g_is_512k;
+    g_ovl_api.fire_mask = controls_fire_mask();
+    g_ovl_api.game = &live_game;
+    g_ovl_api.pickup = &live_pickup_counter;
+    g_ovl_api.decline = &live_dlg_decline;
+    g_ovl_send_clk = getTimer();
+    entry = (unsigned char (*)(const struct ovl_api *, unsigned char))hdr.entry;
+    entry(&g_ovl_api, which);
+
+    region_save(0);
+    gime_window_playfield();
+    /* Repaint the game unseen, as at startup. */
+    gime_set_palette(black_clut);
+    if (g_hw) {
+        hw_init();
+    }
+    g_hud_owed = 2;
+    present(HW_PRESENT_FULL);
+    apply_palette();
+    controls_read(&drain);
+}
+
+/* H, M and I open the help, map and inventory windows. */
+static void check_window_keys(void)
+{
+    unsigned char key = 0;
+
+    if (controls_keys_valid()) {
+        if (isKeyPressed(KEY_PROBE_H, KEY_BIT_H)) {
+            key = OVL_HELP + 1;
+        } else if (isKeyPressed(KEY_PROBE_M, KEY_BIT_M)) {
+            key = OVL_MAP + 1;
+        } else if (isKeyPressed(KEY_PROBE_I, KEY_BIT_I)) {
+            key = OVL_INVENTORY + 1;
+        }
+    }
+    if (key != 0 && key != window_key_was) {
+        run_overlay((unsigned char)(key - 1));
+    }
+    window_key_was = key;
+}
+
+/* Server-opened windows: a dialogue page, or a quest offer. They wait out a
+ * map load, as on the Atari. */
+static void check_server_windows(void)
+{
+    if (live_map_loading) {
+        return;
+    }
+    if (live_game.dlg.request) {
+        live_game.dlg.request = 0;
+        run_overlay(OVL_DIALOGUE);
+    } else if (live_game.message_dirty &&
+               live_game.message_id == RTS_MSG_QUEST_OFFER) {
+        run_overlay(OVL_QUEST_OFFER);
+    }
+}
+
+/* Saves newly carried items; the inventory window lists only those. */
+static void update_items_seen(void)
+{
+    if (live_game.inv.seen != g_items_saved) {
+        g_items_saved = live_game.inv.seen;
+        pref_items_seen_save(g_token, g_items_saved);
+    }
+}
+
+static void check_hw_toggle(void)
+{
+    unsigned char down = isKeyPressed(KEY_PROBE_CLEAR, KEY_BIT_CLEAR) ? 1 : 0;
+
+    if (down && !clear_was_down && g_is_512k) {
+        g_hw = (unsigned char)!g_hw;
+        pref_hwscroll_save(g_hw);
+        gime_set_palette(black_clut); /* switch and repaint unseen */
+        if (g_hw) {
+            hw_init();
+        } else {
+            hw_leave();
+            gime_select_buffers(g_is_512k);
+            g_hud_owed = 2;
+        }
+        present(HW_PRESENT_FULL);
+        apply_palette();
+    }
+    clear_was_down = down;
+}
+
+/* Hit blinks tick once per loop pass: at this frame rate a 60 Hz count
+ * (the Atari's) would end before a frame showed it. */
+static void update_hit_flash(void)
+{
+    static unsigned char last_health;
+    unsigned char i;
+
+    for (i = 0; i < live_game.beaver_count; ++i) {
+        if (live_game.beavers[i].hit_timer != 0) {
+            --live_game.beavers[i].hit_timer;
+        }
+    }
+    if (live_game.health < last_health) {
+        player_hit_timer = RTS_HIT_FLASH_FRAMES;
+    } else if (player_hit_timer != 0) {
+        --player_hit_timer;
+    }
+    last_health = live_game.health;
+}
+
+/* HUD status: walk speed 1-5 (5 fastest), and the renderer on 512K. */
+static void update_status(unsigned char walk_idx)
+{
+    const char *mode = 0;
+
+    if (g_hw) {
+        mode = "HW";
+    } else if (g_is_512k) {
+        mode = "SW";
+    }
+    hud_set_status((unsigned char)(WALK_PRESETS - walk_idx), mode);
+}
+
+/* Cheap fingerprint of everything the playfield shows, so a redraw happens
+ * only when something visible changed. */
+static unsigned world_signature(void)
+{
+    unsigned h = player_x;
+    unsigned char i;
+
+    h = h * 33 + player_y;
+    h = h * 33 + (player_hit_timer & 1);
+    h = h * 33 + view_x;
+    h = h * 33 + view_y;
+    h = h * 33 + live_terrain.origin_x;
+    h = h * 33 + live_terrain.origin_y;
+    for (i = 0; i < live_game.beaver_count; ++i) {
+        h = h * 33 + live_game.beavers[i].x;
+        h = h * 33 + live_game.beavers[i].y;
+        h = h * 33 + live_game.beavers[i].hp;
+        h = h * 33 + live_game.beavers[i].kind;
+        h = h * 33 + (live_game.beavers[i].hit_timer & 1);
+    }
+    for (i = 0; i < live_game.remote_count; ++i) {
+        h = h * 33 + live_game.remotes[i].x;
+        h = h * 33 + live_game.remotes[i].y;
+        h = h * 33 + live_game.remotes[i].state;
+    }
+    for (i = 0; i < live_game.item_count; ++i) {
+        h = h * 33 + live_game.items[i].x;
+        h = h * 33 + live_game.items[i].y;
+        h = h * 33 + live_game.items[i].item_id;
+    }
+    for (i = 0; i < RTS_MAX_TRACERS; ++i) {
+        if (live_game.tracers[i].active) {
+            h = h * 33 + live_game.tracers[i].x + 1;
+            h = h * 33 + live_game.tracers[i].y;
+        }
+    }
+    return h;
+}
+
+/* The live game: input, prediction, sends, receive, camera, redraw -- in
+ * the order the Atari client runs them. Never returns. */
+static void game_loop(unsigned first_sig)
+{
+    struct controls ctl;
+    unsigned char repeat_dir = CTL_NONE;
+    unsigned char aim = RTS_FACE_DOWN;
+    unsigned char facing = RTS_FACE_DOWN;
+    unsigned char walk_idx = DEFAULT_WALK;
+    unsigned char fire_now;
+    unsigned char input_now;
+    unsigned char v_was_down = 0;
+    unsigned char v_down;
+    unsigned char lost_shown = 0;
+    unsigned char pid;
+    unsigned repeat_clk = 0;
+    unsigned send_clk = getTimer();
+    unsigned bullet_clk = getTimer();
+    unsigned now;
+    unsigned sig;
+    unsigned last_sig = first_sig;
+    unsigned char have_sig = 1;
+    unsigned char mode;
+    unsigned char hud_new;
+
+    for (;;) {
+        live_pump();
+        player_apply_correction_step();
+        now = getTimer();
+        fire_now = 0;
+        input_now = 0;
+
+        if (!live_map_loading) {
+            controls_read(&ctl);
+
+            if (ctl.dir == CTL_NONE) {
+                repeat_dir = CTL_NONE;
+            } else {
+                aim = ctl.dir;
+                if (ctl.dir < RTS_FACE_FIRST_DIAGONAL) {
+                    facing = ctl.dir;
+                }
+                /* A new direction steps at once; a held one waits out the
+                 * cadence. The gate opens whether or not the step is legal,
+                 * so walking into a wall does not delay turning away. */
+                if (ctl.dir != repeat_dir ||
+                    (unsigned)(now - repeat_clk) >= walk_ticks[walk_idx]) {
+                    repeat_dir = ctl.dir;
+                    repeat_clk = now;
+                    player_try_move(ctl.dir);
+                }
+            }
+
+            fire_now = ctl.fire;
+            /* SPACE also talks to an adjacent NPC, as on the Atari. */
+            if (ctl.fire || ctl.interact) {
+                ++live_pickup_counter;
+                input_now = 1;
+            }
+            if (ctl.pvp) {
+                ++live_pvp_counter;
+                input_now = 1;
+            }
+
+            v_down = controls_keys_valid() &&
+                     isKeyPressed(KEY_PROBE_V, KEY_BIT_V) ? 1 : 0;
+            if (v_down && !v_was_down) {
+                walk_idx = (unsigned char)((walk_idx + 1) % WALK_PRESETS);
+            }
+            v_was_down = v_down;
+        }
+        check_display_toggle();
+        check_exit();
+        check_window_keys();
+        check_server_windows();
+        update_items_seen();
+        check_hw_toggle();
+
+        /* A predicted step or a button press goes out at once; otherwise the
+         * state repeats on the heartbeat interval. */
+        if (input_now || fire_now || player_send_pending ||
+            (unsigned)(now - send_clk) >= SEND_TICKS) {
+            send_clk = now;
+            live_facing = facing;
+            live_send_state(fire_now ? aim : facing, fire_now);
+        }
+        live_service();
+
+        if (fire_now) {
+            player_fire(aim);
+        }
+        if ((unsigned)(now - bullet_clk) >= BULLET_TICKS) {
+            bullet_clk = now;
+            player_tracers_step();
+        }
+
+        if (live_terrain_reset) {
+            live_terrain_reset = 0;
+            if ((unsigned)(player_x - view_x) >= VIEW_COLS ||
+                (unsigned)(player_y - view_y) >= VIEW_ROWS) {
+                player_snap(player_x, player_y);
+            }
+            have_sig = 0;
+        }
+        player_update_view();
+        update_hit_flash();
+
+        pid = live_map_palette;
+        if (pid < PALETTE_ID_COUNT && pid != g_palette_id) {
+            g_palette_id = pid;
+            apply_palette();
+        }
+        if (!live_connected && !lost_shown) {
+            lost_shown = 1;
+            *(unsigned char *)0xFF9A = BORDER_LOST;
+        } else if (live_connected && lost_shown) {
+            lost_shown = 0;
+            *(unsigned char *)0xFF9A = g_border;
+        }
+
+        update_status(walk_idx);
+        hud_new = 0;
+        if (hud_update(&live_game, now)) {
+            if (g_hw) {
+                hw_hud_refresh();
+                hud_new = 1;
+            } else {
+                hud_blit(1);
+            }
+        }
+
+        if (live_map_loading) {
+            continue;
+        }
+        sig = world_signature();
+        if (!have_sig || sig != last_sig || live_game.tile_changed || hud_new) {
+            if (!have_sig) {
+                mode = HW_PRESENT_FULL;
+            } else if (live_game.tile_changed) {
+                mode = HW_PRESENT_TILES;
+            } else {
+                mode = HW_PRESENT_MOVE;
+            }
+            present(mode);
+            have_sig = 1;
+            last_sig = sig;
+            live_game.tile_changed = 0;
+        }
+    }
+}
+
+/* Leaves graphics mode, shows msg, and reboots into the setup program. */
+static void show_text(unsigned char col, const char *msg)
+{
+    display_text_colors(); /* before width() too, so no other colors show */
+    width(80);
+    display_text_colors();
+    locate(col, 11);
+    while (*msg) {
+        putchar(*msg++);
+    }
+}
+
+static void fail(const char *msg)
+{
+    *(unsigned char *)0xFF98 = 0; /* graphics mode off */
+    show_text(0, msg);
+    putchar('\r');
+    waitkey(0);
+    coldStart();
+}
+
+int main(void)
+{
+    char host[HOST_MAX_LEN + 1];
+    char username[LOGIN_USERNAME_MAX + 1];
+    char token_ascii[LOGIN_TOKEN_MAX + 1];
+    unsigned char t;
+
+    initCoCoSupport();
+    *(unsigned char *)0xFFD9 = 0; /* 1.79 MHz */
+    t = display_target_saved();
+    g_display_target = t == DISPLAY_UNSET ? DISPLAY_RGB : t;
+    show_text(33, "Please wait...");
+    host_init(host);
+    if (!identity_load(host, username, token_ascii)) {
+        fail("No saved login. Press a key.");
+    }
+    g_token = identity_token(token_ascii);
+    if (!live_connect(host, g_token)) {
+        fail("Cannot reach server. Press a key.");
+    }
+
+    if (!live_wait_ready(WORLD_WAIT_TICKS)) {
+        fail("No world data. Press a key.");
+    }
+
+    /* Everything below is drawn with an all-black palette, so neither the
+     * power-up contents of screen memory nor the first paint is seen. */
+    set_border(0);
+    gime_set_palette(black_clut);
+    gime_init_mode();
+    g_palette_id = PALETTE_ID_OVERWORLD;
+
+    block_copy(&g_items_saved, OVL_BLOCK, OVL_ITEMS_SEEN_OFS, 1, 0);
+    live_game.inv.seen |= g_items_saved;
+    g_is_512k = ram_probe_is_512k();
+    region_save(1);
+    gime_select_buffers(g_is_512k);
+    g_hud_owed = 2;
+    hud_init();
+    g_hw = g_is_512k && pref_hwscroll_load();
+    if (g_hw) {
+        hw_init();
+    }
+
+    player_snap(live_game.player_x, live_game.player_y);
+    player_update_view();
+    update_status(DEFAULT_WALK);
+    hud_update(&live_game, getTimer());
+    live_terrain_reset = 0;
+    live_game.tile_changed = 0;
+    present(HW_PRESENT_FULL);
+    if (live_map_palette < PALETTE_ID_COUNT) {
+        g_palette_id = live_map_palette;
+    }
+    apply_palette();
+    set_border(g_is_512k ? BORDER_512K : BORDER_128K);
+    game_loop(world_signature());
+
+    return 0;
+}

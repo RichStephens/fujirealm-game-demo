@@ -12,7 +12,7 @@ LOGIN_SERVER_PORT ?= 9010
 MAKEOVERRIDES_PASS = SERVER_HOST=$(SERVER_HOST) \
 	HYBRID_SERVER_PORT=$(HYBRID_SERVER_PORT) LOGIN_SERVER_PORT=$(LOGIN_SERVER_PORT)
 
-.PHONY: all atari lynx atr nettest clean test test-server test-tools test-lynx \
+.PHONY: all atari lynx coco atr nettest clean test test-server test-tools test-lynx \
 	test-intv test-editor run-server run-login-server run-smoke-server run-bootstrap-server
 
 all: atari lynx
@@ -23,6 +23,12 @@ atari:
 lynx:
 	$(MAKE) -C lynx-client all
 
+# Needs cmoc, not on host PATH -- build with `defoogi make coco`. Not part of
+# `all` for the same reason intv-client isn't: its toolchain isn't universally
+# available outside a container.
+coco:
+	$(MAKE) -C coco3-client all
+
 atr:
 	$(MAKE) -C atari8-client atr
 
@@ -32,6 +38,7 @@ nettest:
 clean:
 	$(MAKE) -C atari8-client clean
 	$(MAKE) -C lynx-client clean
+	$(MAKE) -C coco3-client clean
 
 # --- tests ------------------------------------------------------------------
 
@@ -63,11 +70,19 @@ test-editor:
 # in realtime mode -- only hybrid_server handles that second phase.
 # SERVER_ARGS passes extra flags through, e.g. the stats-page position feed:
 #   make run-server SERVER_ARGS="--positions-file server/positions.json"
+#
+# Server output goes to the terminal and is appended to $(LOG_DIR)/<name>.log,
+# each line timestamped so a session can be lined up against fujinet.log.
+LOG_DIR ?= logs
+STAMP = while IFS= read -r line; do printf '%s %s\n' "$$(date +%T.%N | cut -c1-12)" "$$line"; done
+
 run-server:
-	python3 -m server.hybrid_server --port $(HYBRID_SERVER_PORT) --debug $(SERVER_ARGS)
+	@mkdir -p $(LOG_DIR)
+	python3 -u -m server.hybrid_server --port $(HYBRID_SERVER_PORT) --debug $(SERVER_ARGS) 2>&1 | $(STAMP) | tee -a $(LOG_DIR)/hybrid_server.log
 
 run-login-server:
-	python3 -m server.login_server --port $(LOGIN_SERVER_PORT) --debug
+	@mkdir -p $(LOG_DIR)
+	python3 -u -m server.login_server --port $(LOGIN_SERVER_PORT) --debug 2>&1 | $(STAMP) | tee -a $(LOG_DIR)/login_server.log
 
 # The older byte-stream-only server, kept for exercising the bootstrap protocol
 # in isolation.

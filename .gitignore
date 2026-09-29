@@ -20,6 +20,24 @@ lynx-client/*.o
 lynx-client/src/*.o
 lynx-client/*.cap
 
+# CoCo 3 client build outputs
+coco3-client/*.bin
+coco3-client/*.dsk
+coco3-client/*.map
+coco3-client/*.asm
+coco3-client/*.lst
+coco3-client/*.link
+coco3-client/*.o
+coco3-client/*.s
+coco3-client/src/*.o
+coco3-client/AUTOEXEC.BAS
+coco3-client/src/server_host_default.h
+coco3-client/src/ovl_image.c
+coco3-client/*.raw
+# fnlib.py's fujinet-lib-experimental checkout + build (cloned fresh, not
+# vendored -- see coco3-client/Makefile)
+coco3-client/_cache/
+
 # Release staging
 release/
 
@@ -28,6 +46,8 @@ release/
 server/sessions.json
 server/sessions.json.bak-*
 server/positions.json
+# Server logs written by make run-server / run-login-server.
+logs/
 
 # Python
 __pycache__/
@@ -35,4 +55,5 @@ __pycache__/
 
 # Custom
 ref/
+.claude/
 
