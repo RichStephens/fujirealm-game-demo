@@ -1,6 +1,8 @@
 #ifndef OVL_API_H
 #define OVL_API_H
 
+#include "host.h"
+
 /* Full-screen windows (help, map, inventory, dialogue, quest offer) run as an
  * overlay: code built separately at the address of the renderers' code (the
  * region between ovl_region_start in redraw.c and ovl_region_end in
@@ -9,8 +11,17 @@
  * entry, then puts the renderers back. */
 
 #define OVL_BLOCK 5
-/* FRLOGIN leaves pref_items_seen_load()'s result here in OVL_BLOCK. */
-#define OVL_ITEMS_SEEN_OFS 0x1FFF
+
+/* What FRLOGIN hands the game, at OVL_HANDOFF_OFS in OVL_BLOCK. */
+#define OVL_HANDOFF_OFS 0x1F00
+#define OVL_HANDOFF_MAGIC 0x4C
+
+struct ovl_handoff {
+    unsigned char magic;
+    unsigned char items_seen; /* pref_items_seen_load() */
+    unsigned long token;
+    char host[HOST_MAX_LEN + 1];
+};
 #define OVL_MAGIC0 'F'
 #define OVL_MAGIC1 'O'
 
@@ -38,7 +49,6 @@ struct ovl_api {
     void (*clear)(void);
     void (*text)(unsigned char col, unsigned char row, const char *s);
     void (*show)(void);
-    unsigned char is_512k;
     unsigned char fire_mask; /* selected stick's button 1, or 0 */
     struct rt_state *game;
     unsigned char *pickup;   /* live_pickup_counter */
@@ -48,7 +58,7 @@ struct ovl_api {
 void ovl_region_start(void);
 void ovl_region_end(void);
 
-/* FRLOGIN: copies its built-in overlay image and items_seen into OVL_BLOCK. */
-void ovl_store(unsigned char items_seen);
+/* FRLOGIN: copies its built-in overlay image and h into OVL_BLOCK. */
+void ovl_store(const struct ovl_handoff *h);
 
 #endif

@@ -11,6 +11,7 @@
 # game, which is kept free of login/bootstrap/printf code to leave room.
 PRODUCT = FRLOGIN
 PLAY = FRPLAY
+VIEW = ARTVIEW
 DISK = FUJIRLM3
 
 CMOC ?= cmoc
@@ -39,25 +40,29 @@ ifeq ($(strip $(FUJINET_LIB_LDLIB)),)
 endif
 endif
 
-SETUP_SRC = src/setup.c src/runm.c src/gime.c src/tiles.c src/testpat.c \
-	src/palette.c src/ram.c src/display.c src/displayinit.c src/host.c \
+SETUP_SRC = src/setup.c src/runm.c src/gime.c src/display.c \
+	src/displayinit.c src/host.c \
 	src/hostedit.c src/net.c src/input.c src/bf_proto.c src/login.c \
-	src/identity.c src/itemseen.c src/ovlstore.c src/ovl_image.c
+	src/identity.c src/itemseen.c src/ovlstore.c src/ovl_image.c \
+	src/art_image.c
 # redraw.c and hwscroll.c must stay last: their code is the overlay region
 # (see ovl_api.h), and CMOC lays code out in command-line order.
-PLAY_SRC = src/play.c src/gime.c src/tiles.c src/palette.c src/ram.c \
-	src/display.c src/host.c src/identity.c src/rt_state.c src/terrain.c \
+PLAY_SRC = src/play.c src/gime.c src/palette.c src/ram.c \
+	src/display.c src/rt_state.c src/terrain.c \
 	src/live.c src/player.c src/controls.c src/prefs.c src/hud.c \
 	src/redraw.c src/hwscroll.c
-HEADERS = src/gime.h src/tiles.h src/testpat.h src/palette.h src/ram.h \
+# The art viewer (make artview, not part of all), on its own boot disk: every
+# image with its use, and a sample scene.
+VIEW_SRC = tools/artview/artview.c src/gime.c src/palette.c src/art_image.c
+HEADERS = src/gime.h src/tiles.h src/palette.h src/ram.h \
 	src/display.h src/host.h src/net.h src/input.h src/bf_proto.h \
 	src/login.h src/identity.h src/runm.h src/rt_state.h src/terrain.h \
 	src/live.h src/player.h src/controls.h src/hwscroll.h src/prefs.h \
-	src/hud.h src/ovl_api.h \
+	src/hud.h src/ovl_api.h src/art.h \
 	src/server_host_default.h
 
-# src/rt_state.c/.h are lynx-client's realtime v3 codec, copied except that
-# rt_crc16 computes bit by bit instead of using 512 bytes of tables.
+# src/rt_state.c/.h started as lynx-client's realtime v3 codec. rt_crc16
+# computes bit by bit instead of using 512 bytes of tables.
 # src/bootstrap.c/.h are NOT built: the game attaches without a bootstrap and
 # the server streams the terrain window in-band. Kept for reference.
 
@@ -85,9 +90,11 @@ LDLIBS = -L$(FUJINET_LIB_DIR) -l$(FUJINET_LIB_LDLIB)
 
 SETUP_BIN = $(PRODUCT).bin
 PLAY_BIN = $(PLAY).bin
+VIEW_BIN = $(VIEW).bin
 DSK = $(DISK).dsk
+VIEW_DSK = $(VIEW).dsk
 
-.PHONY: all disk clean size
+.PHONY: all disk artview clean size
 
 all: disk
 
@@ -96,6 +103,9 @@ $(SETUP_BIN): $(SETUP_SRC) $(HEADERS)
 
 $(PLAY_BIN): $(PLAY_SRC) $(HEADERS)
 	$(CMOC) $(CFLAGS) --org=$(PLAY_ORG) -o $@ $(PLAY_SRC) $(LDLIBS)
+
+$(VIEW_BIN): $(VIEW_SRC) $(HEADERS)
+	$(CMOC) $(CFLAGS) -Isrc --org=$(ORG) -o $@ $(VIEW_SRC)
 
 # The overlay (ovl_api.h) is linked into the game's renderer region, so it is
 # built after the game, and FRLOGIN carries its image.
@@ -112,6 +122,9 @@ src/ovl_image.c: $(OVL).raw tools/ovl_pack.py
 	./tools/ovl_pack.py $(OVL).raw $(OVL).map \
 		$$(./tools/ovl_region.py end $(PLAY).map) $@
 
+src/art_image.c: art/coco_tileset.json src/palette.c tools/art_pack.py
+	./tools/art_pack.py art/coco_tileset.json src/palette.c $@
+
 # RUNM, not LOADM:EXEC: the load overwrites this BASIC program ($2601), so
 # nothing after it can be parsed.
 AUTOEXEC.BAS:
@@ -127,6 +140,16 @@ $(DSK): $(SETUP_BIN) $(PLAY_BIN) AUTOEXEC.BAS
 
 disk: $(DSK)
 
+artview: $(VIEW_DSK)
+
+$(VIEW_DSK): $(VIEW_BIN)
+	rm -f $@ view_autoexec.bas
+	@printf '10 RUNM"%s"\n' $(VIEW) > view_autoexec.bas
+	$(DECB) dskini $@
+	$(DECB) copy -b -2 $(VIEW_BIN) $@,$(VIEW).BIN
+	$(DECB) copy -t -0 view_autoexec.bas $@,AUTOEXEC.BAS
+	@$(DECB) dir $@
+
 # How far each program's program_end reached (limit $(LIMIT)).
 size: $(SETUP_BIN) $(PLAY_BIN)
 	@for p in $(PRODUCT) $(PLAY); do \
@@ -134,5 +157,5 @@ size: $(SETUP_BIN) $(PLAY_BIN)
 	done
 
 clean:
-	rm -f $(SETUP_BIN) $(PLAY_BIN) $(DSK) AUTOEXEC.BAS *.map *.asm *.lst *.link *.o *.s src/*.o src/server_host_default.h \
-		$(OVL).raw src/ovl_image.c
+	rm -f $(SETUP_BIN) $(PLAY_BIN) $(VIEW_BIN) $(DSK) $(VIEW_DSK) view_autoexec.bas AUTOEXEC.BAS *.map *.asm *.lst *.link *.o *.s src/*.o src/server_host_default.h \
+		$(OVL).raw src/ovl_image.c src/art_image.c

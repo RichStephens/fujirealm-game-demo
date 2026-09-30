@@ -21,6 +21,7 @@ unsigned view_x;
 unsigned view_y;
 unsigned char player_send_pending;
 unsigned char player_hit_timer;
+unsigned char player_anim;
 
 static unsigned char predicted_pending;
 static unsigned predicted_seq;
@@ -214,6 +215,7 @@ unsigned char player_try_move(unsigned char dir)
 
     player_x = nx;
     player_y = ny;
+    player_anim ^= 1;
     corr_pending = 0;
     player_send_pending = 1;
     return 1;

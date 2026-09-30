@@ -4,9 +4,7 @@
 #include <coco.h>
 
 /* 320x225x16, 16x16 tiles: 20x12 playfield (320x192) + 33-line HUD strip.
- * Phase 1 draws both from one shared palette; the per-scanline reload that
- * gives the HUD its own palette is a separate, unverified raster-timing
- * mechanism deferred to its own phase. */
+ * Both share one palette. */
 #define TILE_W 16
 #define TILE_H 16
 #define PLAYFIELD_COLS 20
@@ -88,6 +86,9 @@ void gime_set_palette(const unsigned char *clut16);
  * GFX_ENTER()/GFX_LEAVE() bracket. The playfield is the resting state. */
 void gime_window_playfield(void);
 void gime_window_hud(void);
+
+/* First physical block of the draw buffer. */
+unsigned char gime_draw_block(void);
 
 /* Double-buffered only: maps the DISPLAYED buffer's HUD strip and returns 1;
  * returns 0 (nothing mapped) when single-buffered. */

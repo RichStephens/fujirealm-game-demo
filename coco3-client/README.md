@@ -1,9 +1,7 @@
 # FujiRealm — CoCo 3 client
 
 A [CMOC](http://perso.b2b2c.ca/~sarrazip/dev/cmoc.html) C client for the
-Tandy Color Computer 3. **Work in progress:** the world is drawn as flat
-colored 16×16 tiles with small colored markers for players, enemies, items
-and shots — placeholder graphics until real art exists.
+Tandy Color Computer 3, drawn in 16×16 tiles and sprites in 16 colors.
 
 It speaks the same protocol as the other clients over a plain N: TCP
 connection through FujiNet's DriveWire interface (no netstream), polling for
@@ -11,9 +9,9 @@ data.
 
 ## What it needs
 
-- A CoCo 3 with **128K or 512K**. 512K adds double buffering and the
-  hardware-scrolling renderer (CLEAR switches between HW and SW); 128K
-  always uses the software renderer.
+- A CoCo 3 with **128K or 512K**. With 512K the GIME scrolls the screen in
+  hardware, so movement is noticeably smoother; with 128K there is no room
+  for that, and the whole view is redrawn with each step.
 - A FujiNet for the CoCo (bitbanger or Becker-style), or XRoar with a
   FujiNet-PC.
 - An RGB or composite monitor; the palette is chosen on first run and F1
@@ -27,10 +25,16 @@ cmoc and decb are not on the host PATH; build through `defoogi`:
 defoogi make coco SERVER_HOST=192.168.1.100    # from the repo root
 ```
 
-The output is `FUJIRLM3.dsk`. Like the other clients, the endpoint is baked
-in at build time; copy `config.mk.example` to `config.mk` to make it stick.
-A host saved from the setup screen (F2) overrides it at runtime. The first
-build clones and builds fujinet-lib-experimental into `_cache/`.
+The output is `FUJIRLM3.dsk`. `make artview` builds `ARTVIEW.dsk`, a boot
+disk that shows every tile and sprite with its use. Like the other clients,
+the endpoint is baked in at build time; copy `config.mk.example` to
+`config.mk` to make it stick. A host saved from the setup screen (F2)
+overrides it at runtime. The first build clones and builds
+fujinet-lib-experimental into `_cache/`.
+
+The art is drawn in `tools/artgen`; `./artgen.py --help` shows how it writes
+the tileset and `src/palette.c`. `tools/tile-editor/coco.html` can touch it
+up, but regenerating overwrites those edits.
 
 ## Run
 
@@ -49,5 +53,4 @@ display type on first run, logs in (or resumes), then loads the game,
 | P | Toggle PvP |
 | V | Walk speed |
 | F1 | RGB / composite palette |
-| CLEAR | HW / SW scrolling (512K) |
 | BREAK | Exit to BASIC; in a dialogue, decline |

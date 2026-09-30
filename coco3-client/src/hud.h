@@ -7,7 +7,8 @@
  * hearts, level, gold, PvP kills), the active quest, the last server message.
  * They are drawn into an image in HUD_IMAGE_BLOCK (160-byte rows, HUD_LINES
  * tall) that each renderer copies onto the screen. Block 7 is free on both
- * RAM sizes (gime.c, ram.c). */
+ * RAM sizes (gime.c, ram.c); its tail also holds the 128K renderer save
+ * (play.c) and the terrain fill buffer (terrain.h). */
 #define HUD_IMAGE_BLOCK 7
 #define HUD_IMAGE_STRIDE 160
 
@@ -18,9 +19,8 @@ void hud_init(void);
  * Returns 1 if the image changed. */
 unsigned char hud_update(struct rt_state *st, unsigned now);
 
-/* Stats-line status: walk speed digit, and a 2-character renderer name or
- * NULL for none. mode must stay valid. */
-void hud_set_status(unsigned char walk, const char *mode);
+/* Stats-line walk speed digit. */
+void hud_set_walk(unsigned char walk);
 
 /* Shows a 3-character note at the right end of the stats line for about two
  * seconds. text must stay valid. */

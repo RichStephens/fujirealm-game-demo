@@ -1,5 +1,22 @@
 #include "terrain.h"
+#include "gime.h"
 #include <cmoc.h>
+
+/* Copies len bytes between low RAM and the fill buffer. */
+static void fill_copy(unsigned char *low, unsigned ofs, unsigned len,
+                      unsigned char to_fill)
+{
+    unsigned char *high = GFX_WINDOW + TERRAIN_FILL_OFS + ofs;
+
+    *(unsigned char *)0xFFAC = TERRAIN_FILL_BLOCK;
+    GFX_ENTER();
+    if (to_fill) {
+        memcpy(high, low, len);
+    } else {
+        memcpy(low, high, len);
+    }
+    GFX_LEAVE();
+}
 
 void terrain_init(struct terrain_cache *cache, unsigned origin_x,
                   unsigned origin_y)
@@ -148,8 +165,8 @@ signed char terrain_fill_apply_row(struct terrain_fill *fill,
     if (fill->rows_have & bit) {
         return TERRAIN_FILL_DUPLICATE;
     }
-    memcpy(&fill->tiles[(unsigned)row_index * BOOTSTRAP_WINDOW_W], tiles,
-           BOOTSTRAP_WINDOW_W);
+    fill_copy((unsigned char *)tiles, (unsigned)row_index * BOOTSTRAP_WINDOW_W,
+              BOOTSTRAP_WINDOW_W, 1);
     fill->rows_have |= bit;
     return fill->rows_have == TERRAIN_ALL_ROWS ? TERRAIN_FILL_COMPLETE
                                                 : TERRAIN_FILL_ROW_APPLIED;
@@ -158,7 +175,7 @@ signed char terrain_fill_apply_row(struct terrain_fill *fill,
 void terrain_fill_activate(struct terrain_fill *fill,
                            struct terrain_cache *cache)
 {
-    memcpy(cache->tiles, fill->tiles, BOOTSTRAP_TERRAIN_SIZE);
+    fill_copy(cache->tiles, 0, BOOTSTRAP_TERRAIN_SIZE, 0);
     cache->origin_x = fill->origin_x;
     cache->origin_y = fill->origin_y;
     cache->revision_trust_next = 1;

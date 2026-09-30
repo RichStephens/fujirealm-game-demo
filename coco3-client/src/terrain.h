@@ -42,14 +42,17 @@ struct terrain_cache {
 };
 
 /* A WINDOW_ROW fill under assembly, kept apart from the cache so a partial
- * fill is never drawn. */
+ * fill is never drawn. Its tiles are assembled in TERRAIN_FILL_BLOCK at
+ * TERRAIN_FILL_OFS, past the HUD image, to spare low RAM. */
+#define TERRAIN_FILL_BLOCK 7
+#define TERRAIN_FILL_OFS 0x1C00
+
 struct terrain_fill {
     unsigned char active;
     unsigned char fill_id;
     unsigned origin_x;
     unsigned origin_y;
     unsigned long rows_have;
-    unsigned char tiles[BOOTSTRAP_TERRAIN_SIZE];
 };
 
 /* Sets the origin and clears revision state; tiles are left as bootstrap

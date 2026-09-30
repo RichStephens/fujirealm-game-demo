@@ -1,6 +1,6 @@
 # FujiRealm Tile Editor
 
-The browser-based art tool for both FujiRealm clients. It is a plain static page
+The browser-based art tool for the FujiRealm clients. It is a plain static page
 with no build step and no server: open the `.html` file directly.
 
 | Page | Edits | Feeds |
@@ -8,6 +8,7 @@ with no build step and no server: open the `.html` file directly.
 | `index.html` | `atari8-client/art/fujirealm_charsetter.json` | the Atari 8-bit ANTIC 4 tiles |
 | `lynx.html` | `lynx-client/art/lynx_tileset.json` | the Atari Lynx 8x8 sprites |
 | `intv.html` | `intv-client/art/intv_cards.json` | the Intellivision GRAM cards |
+| `coco.html` | `coco3-client/art/coco_tileset.json` | the CoCo 3 16x16 images |
 
 Each is linked from the others' headers.
 
@@ -153,6 +154,31 @@ is runtime metadata owned by `intv-client/tools/intv_cards.py`: the editor shows
 it and both the browser and the generator reject a file that edits it. Pixels and
 colours are what you change.
 
+## CoCo 3 editor (`coco.html`)
+
+The Lynx editor's layout at 16x16: every image is 16x16 pixels of palette
+indices, stored as sixteen strings of sixteen hex digits.
+
+Load `coco3-client/art/coco_tileset.json`. It holds the 35 terrain tiles the
+server streams, 8 player frames (front, right, left and back, each standing and
+stepping; other players use them too, recolored in the game) and 16 entity
+images (enemies, Wilhelm, items, the bullet).
+
+- Left click paints the selected color; right click picks the color under the
+  cursor; `0`-`9` / `a`-`f` select a color directly.
+- The palette menu previews the overworld, cave or PvP colors. They are the RGB
+  palettes from `coco3-client/src/palette.c`; composite monitors show them
+  differently. The file carries a copy, and the build fails if the two differ.
+- Color 0 is transparent on player frames and entities; the neighbors panel
+  shows those standing on grass, and terrain tiles repeated 3x3 for seams.
+
+Saving downloads the JSON. Drop it back over the file and rebuild; the Makefile
+repacks the art whenever the file changes:
+
+```sh
+defoogi make coco
+```
+
 ## Tests
 
 The pixel/model layer is unit tested and needs only node:
@@ -161,9 +187,10 @@ The pixel/model layer is unit tested and needs only node:
 node --test tile-model.test.js
 node --test lynx-model.test.js
 node --test intv-model.test.js
+node --test coco-model.test.js
 ```
 
-Or `make test-editor` from the repo root, which runs all three.
+Or `make test-editor` from the repo root, which runs all four.
 
 ## Offline use
 
@@ -178,5 +205,6 @@ font and map editor by the **4Coloreditor Team**, used with their kind
 permission. Thank you!
 
 FujiRealm's version replaces the generic font/map workflow with the game's
-logical tile model, and adds the Lynx editor. The original is well worth using
-in its own right for any Atari 8-bit ANTIC 2/4 work.
+logical tile model, and adds the Lynx, Intellivision and CoCo 3 editors. The
+original is well worth using in its own right for any Atari 8-bit ANTIC 2/4
+work.

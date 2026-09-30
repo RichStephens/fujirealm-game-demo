@@ -141,6 +141,13 @@ static void apply_world_state(struct rt_state *state, unsigned char *terrain,
             if (terrain[offset] != w[12]) {
                 terrain[offset] = w[12];
                 state->tile_changed = 1;
+                if (state->changed_n < RTS_MAX_CHANGED) {
+                    state->changed_x[state->changed_n] = (unsigned char)tile_x;
+                    state->changed_y[state->changed_n] = (unsigned char)tile_y;
+                }
+                if (state->changed_n != 0xFF) {
+                    ++state->changed_n;
+                }
             }
         }
     }
@@ -198,9 +205,9 @@ static void apply_quest_update(struct rt_state *state, const unsigned char *w)
     state->quest_dirty = 1;
 }
 
-/* Fold one chunk into the pending display page. Mirrors the Atari client's
- * netstream_apply_dialogue_page exactly; the ordering
- * of these four rules is the contract, not an implementation detail. */
+/* Fold one chunk into the pending display page, as the Atari client's
+ * netstream_apply_dialogue_page does; the ordering of these four rules is the
+ * contract, not an implementation detail. */
 static void apply_dialogue_page(struct rt_state *state, const unsigned char *w)
 {
     unsigned char chunk = w[11];
@@ -244,7 +251,9 @@ static void apply_dialogue_page(struct rt_state *state, const unsigned char *w)
     }
     state->dlg.flags = w[10];
     state->dlg.dirty = 1;
-    if (!state->dlg.active) {
+    if (!state->dlg.active &&
+        !(state->dlg.closed && state->dlg.id == state->dlg.closed_id &&
+          state->dlg.page_index == state->dlg.closed_page)) {
         state->dlg.request = 1;
     }
 }
@@ -320,6 +329,9 @@ static void apply_remote_players(struct rt_state *state,
             rt_spawn_tracer(state, nx, ny, nfacing);
         }
         state->remote_prev_fire[i] = fire;
+        if (nx != state->remotes[i].x || ny != state->remotes[i].y) {
+            state->remotes[i].anim ^= 1;
+        }
         state->remotes[i].x = nx;
         state->remotes[i].y = ny;
         state->remotes[i].facing = nfacing;

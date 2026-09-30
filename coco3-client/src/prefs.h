@@ -1,13 +1,6 @@
 #ifndef PREFS_H
 #define PREFS_H
 
-/* Hardware-scroll preference (appkey key_id 4). Returns 1 (on) unless the user
- * saved "off". Only a well-formed saved record counts: the DriveWire firmware
- * reports success with leftover bytes when a key was never written. */
-unsigned char pref_hwscroll_load(void);
-
-void pref_hwscroll_save(unsigned char on);
-
 /* Items the player has carried at least once: bit n set for item id n
  * (appkey key_id 5, record { ITEMS_MAGIC, token, seen }). The record names
  * its player by login token; another player's record reads as none seen.

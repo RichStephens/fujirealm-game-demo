@@ -62,7 +62,7 @@ test-intv:
 
 # Needs node. The rest of the suite does not.
 test-editor:
-	cd tools/tile-editor && node --test tile-model.test.js lynx-model.test.js intv-model.test.js
+	cd tools/tile-editor && node --test tile-model.test.js lynx-model.test.js intv-model.test.js coco-model.test.js
 
 # --- servers ----------------------------------------------------------------
 

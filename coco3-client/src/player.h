@@ -23,6 +23,8 @@ extern unsigned char player_send_pending;
 /* Counts down while the local player blinks after losing HP; drawn only on
  * even values (Atari enemy hit blink). */
 extern unsigned char player_hit_timer;
+/* Walk frame (0 or 1), flipped by each step (Atari player_anim). */
+extern unsigned char player_anim;
 
 /* Puts the player, prediction state and camera on (x, y): first world state,
  * map change, teleport. */

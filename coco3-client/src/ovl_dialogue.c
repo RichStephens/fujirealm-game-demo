@@ -176,6 +176,9 @@ void show_dialogue(const struct ovl_api *api)
         }
     }
     d->active = 0;
+    d->closed = 1;
+    d->closed_id = d->id;
+    d->closed_page = d->page_index;
     wait_release(api);
 }
 

@@ -6,32 +6,42 @@
 
 #define TILE_ROW_BYTES ((unsigned)TILE_H * BYTES_PER_ROW)
 
-/* Placeholder marker colors: CLUT slots (palette.c). */
-#define MARK_PLAYER 3   /* white */
-#define MARK_REMOTE 14  /* yellow */
-#define MARK_ENEMY 11   /* red */
-#define MARK_NPC 9      /* blue */
-#define MARK_BULLET 12  /* orange */
-/* Item drops: the Atari's three looks (gold, Warden Key, sticks for the rest).
- * Yellow and tan in the overworld and PvP palettes; the cave remaps them. */
-#define MARK_ITEM_GOLD 14  /* yellow */
-#define MARK_ITEM_KEY 3    /* white */
-#define MARK_ITEM_OTHER 13 /* tan */
+/* Items, creatures, other players, the local player and shots in view. */
+#define MAX_SPRITES 32
 
-/* Marker color for an item drop. In redraw.c (game only). */
-unsigned char item_mark_color(unsigned char item_id);
+struct sprite {
+    unsigned char x;
+    unsigned char y;
+    unsigned char img; /* art image number (art.h) */
+};
 
-/* Fills one 16x16 tile (8 bytes wide, 16 lines at the 160-byte stride) at dst
- * inside the graphics window with a single color pair (fill16 = the 4bpp byte
- * doubled). Call inside GFX_ENTER()/GFX_LEAVE(). */
-void fill_tile(unsigned char *dst, unsigned fill16);
+/* Creature animation phase (0 or 1), set by the game loop. */
+extern unsigned char sprite_anim;
+
+/* Fills out with what is in the view whose top-left is world (vx, vy), in
+ * drawing order, and returns the count. (px, py) and facing are the local
+ * player's. In redraw.c (game only), as are the rest. */
+unsigned char sprites_build(struct sprite *out, const struct rt_state *st,
+                            unsigned vx, unsigned vy, unsigned char px,
+                            unsigned char py, unsigned char facing);
+
+/* Copies a 16x16 art image (8-byte rows) to dst, rows stride bytes apart.
+ * Inside the GFX bracket. */
+void copy_tile(unsigned char *dst, const unsigned char *src, unsigned stride);
+
+/* As copy_tile, but color 0 pixels leave dst as it was. */
+void draw_sprite(unsigned char *dst, const unsigned char *src, unsigned stride);
+
+/* draw_sprite of sprite image img from the art mapped at window address art,
+ * in the other-player colors when img has ART_RECOLOR. */
+void put_sprite(unsigned char *dst, const unsigned char *art, unsigned char img,
+                unsigned stride);
 
 /* Draws the live playfield: a PLAYFIELD_COLS x PLAYFIELD_ROWS viewport whose
  * top-left is (cam_x, cam_y) inside the terrain cache (origin_x/origin_y
- * are the cache's world origin), then item drops, enemies, remote players,
- * the local player at (px, py) and shots as small colored blocks over
- * flat-color tiles (color = tile id & 0x0F) -- placeholders until real art. Each tile row brackets
- * itself with GFX_ENTER()/GFX_LEAVE(). In redraw.c (game only). */
+ * are the cache's world origin) from the art block, with the sprites
+ * sprites_build() lists. Each tile row brackets itself with
+ * GFX_ENTER()/GFX_LEAVE(). */
 void draw_world(const unsigned char *terrain, unsigned origin_x,
                 unsigned origin_y, unsigned char cam_x, unsigned char cam_y,
                 unsigned char px, unsigned char py, const struct rt_state *st);

@@ -43,6 +43,11 @@ void gime_window_playfield(void)
     map_window(buffer_base[draw_idx]);
 }
 
+unsigned char gime_draw_block(void)
+{
+    return buffer_base[draw_idx];
+}
+
 void gime_window_hud(void)
 {
     map_window((unsigned char)(buffer_base[draw_idx] + 1));

@@ -1,8 +1,8 @@
 #ifndef FUJIREALM_RT_STATE_H
 #define FUJIREALM_RT_STATE_H
 
-/* Realtime v3 frame parsing and live game state (host-testable, platform
- * independent). Raw frame layout after COBS decode:
+/* Realtime v3 frame parsing and live game state. Raw frame layout after COBS
+ * decode:
  *   [0] payload len N (0..54)   [1] version = 3   [2] type   [3] status
  *   [4-5] seq LE   [6..6+N) payload   [6+N..6+N+2) CRC-16/CCITT-FALSE LE
  * Trailing zero payload bytes are stripped on the wire; rt_apply re-pads.
@@ -42,6 +42,7 @@
 #define RTS_MAX_REMOTE_PLAYERS 12
 #define RTS_MAX_ITEMS 4
 #define RTS_TEXT_MAX 39
+#define RTS_MAX_CHANGED 4
 /* MESSAGE id that opens the quest-offer window (server MSG_QUEST_OFFER). */
 #define RTS_MSG_QUEST_OFFER 17
 
@@ -56,8 +57,7 @@
 #define RTS_ITEM_OIL_SAMPLE 6
 #define RTS_ITEM_RUST_SAMPLE 7
 
-/* Art selection for an item drop, as returned by rt_item_art_index(). Kept
- * out of the renderer so the id -> art mapping is host-testable. */
+/* Art selection for an item drop, as returned by rt_item_art_index(). */
 #define RTS_ART_ITEM_NONE 0
 #define RTS_ART_ITEM_GOLD 1
 #define RTS_ART_ITEM_STICKS 2
@@ -162,6 +162,7 @@ struct rt_remote_player {
     unsigned char y;
     unsigned char facing;
     unsigned char state;
+    unsigned char anim; /* walk frame, flipped when the slot's cell changes */
 };
 
 struct rt_item {
@@ -242,6 +243,11 @@ struct rt_dialogue {
     unsigned char request;
     /* Set by the modal loop while it owns the screen. */
     unsigned char active;
+    /* The page the modal closed on; a late resend of it must not reopen the
+     * modal. play.c clears closed on the next talk/pickup press. */
+    unsigned char closed;
+    unsigned char closed_id;
+    unsigned char closed_page;
     char text[RTS_DLG_PAGE_MAX + 1];
 };
 
@@ -322,6 +328,11 @@ struct rt_state {
      * tree, a taken item). Lets the renderer skip a full repaint when
      * nothing under the viewport moved. The caller clears it. */
     unsigned char tile_changed;
+    /* The cells tile_changed covers, the first RTS_MAX_CHANGED of them;
+     * changed_n counts on past that. The caller clears it with tile_changed. */
+    unsigned char changed_n;
+    unsigned char changed_x[RTS_MAX_CHANGED];
+    unsigned char changed_y[RTS_MAX_CHANGED];
     char message[RTS_TEXT_MAX + 1];
     struct rt_terrain_edge edge;
     struct rt_window_row window_row;

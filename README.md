@@ -3,8 +3,8 @@
 A small server-authoritative multiplayer RPG for retro hardware, playing over  
 [FujiNet](https://fujinet.online). One Python server and four clients: **Atari**  
 **8-bit** in 6502 assembly, **Atari Lynx** in C, **Intellivision** in IntyBASIC,  
-and **Tandy CoCo 3** in C (a work in progress), all speaking the same wire  
-protocol to the same live world.
+and **Tandy CoCo 3** in C, all speaking the same wire protocol to the same  
+live world.
 
 If you want to build a networked game for retro hardware  
 and you are staring at a blank file wondering how any of this fits together,  
@@ -19,16 +19,25 @@ licensed precisely so you can lift whatever is useful.
                     │  hybrid_server.py    │  10 Hz tick, no game
                     └──────────┬───────────┘  logic in the clients
                      TCP       │       TCP
+              ┌────────────────┼────────────────┐
+     ┌────────┴─────────┐      │      ┌─────────┴────────┐
+     │  FujiNet (SIO)   │      │      │FujiNet (ComLynx) │
+     │   POKEY serial   │      │      │    Mikey UART    │
+     └────────┬─────────┘      │      └─────────┬────────┘
+     ┌────────┴─────────┐      │      ┌─────────┴────────┐
+     │ Atari 800/XL/XE  │      │      │    Atari Lynx    │
+     │  MADS assembly   │      │      │     cc65 / C     │
+     │  ANTIC 4 tiles   │      │      │   Suzy sprites   │
+     └──────────────────┘      │      └──────────────────┘
               ┌────────────────┴────────────────┐
-              │                                 │
      ┌────────┴─────────┐             ┌─────────┴────────┐
-     │  FujiNet (SIO)   │             │ FujiNet (ComLynx)│
-     │  POKEY serial    │             │   Mikey UART     │
+     │ FujiNet mailbox  │             │     FujiNet      │
+     │  PiRTO II cart   │             │    DriveWire     │
      └────────┬─────────┘             └─────────┬────────┘
      ┌────────┴─────────┐             ┌─────────┴────────┐
-     │  Atari 800/XL/XE │             │    Atari Lynx    │
-     │  MADS assembly   │             │   cc65 / C       │
-     │  ANTIC 4 tiles   │             │   Suzy sprites   │
+     │  Intellivision   │             │   Tandy CoCo 3   │
+     │    IntyBASIC     │             │     CMOC / C     │
+     │    GRAM cards    │             │  GIME scrolling  │
      └──────────────────┘             └──────────────────┘
 ```
 
@@ -40,8 +49,8 @@ licensed precisely so you can lift whatever is useful.
 | `atari8-client/` | Atari 8-bit client. MADS assembly, ANTIC mode 4, 2×2 tiles, talks to FujiNet over POKEY serial via a vendored Netstream handler.              |
 | `lynx-client/`   | Atari Lynx client. cc65 C with a little assembly, Suzy sprite renderer, talks to FujiNet over ComLynx.                                        |
 | `intv-client/`   | Intellivision client. IntyBASIC, GRAM card tiles, talks to the Intellivision FujiNet (PiRTO II) through its mailbox. See its README.          |
-| `coco3-client/`  | Tandy CoCo 3 client, work in progress with placeholder graphics. CMOC C, GIME hardware scrolling, FujiNet over DriveWire. See its README.     |
-| `tools/`         | Shared build and art tooling, plus `tile-editor/`, the browser tile editor the Atari, Lynx and Intellivision art comes from.                  |
+| `coco3-client/`  | Tandy CoCo 3 client. CMOC C, GIME hardware scrolling, FujiNet over DriveWire. See its README.                                                 |
+| `tools/`         | Shared build and art tooling, plus `tile-editor/`, the browser tile editor for all four clients' art.                                        |
 | `maps/`          | The world as editable CSV grids. `tools/import_map_csv.py` compiles them into the server.                                                     |
 | `docs/`          | The wire protocol, the Atari memory map, and the shared tile-id contract.                                                                     |
 
@@ -192,6 +201,7 @@ the host, which is what makes a machine with no emulator tractable to work on.
 tile-editor/index.html  →  atari8-client/art/fujirealm_charsetter.json  →  make atari
 tile-editor/lynx.html   →  lynx-client/art/lynx_tileset.json            →  make -C lynx-client art
 tile-editor/intv.html   →  intv-client/art/intv_cards.json              →  make -C intv-client art
+tile-editor/coco.html   →  coco3-client/art/coco_tileset.json           →  defoogi make coco
 ```
 
 The clients draw from the same set of logical tile ids, and the server streams  

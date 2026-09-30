@@ -6,6 +6,8 @@
 #include "hud.h"
 #include "controls.h"
 #include "ovl_api.h"
+#include "art.h"
+#include "live.h"
 #include <coco.h>
 #include <cmoc.h>
 
@@ -20,141 +22,37 @@
 #define MIRROR_LINES (MIRROR_ROWS * TILE_H) /* 224 */
 #define FRAME_HUD_TOP PLAYFIELD_LINES
 
-#define MAX_MARKS 32
 #define MAX_DIRTY 24
-
-#define SHAPE_MARKER 0 /* 8x8 centered: entities */
-#define SHAPE_BULLET 1 /* 4x4 centered: shots */
-#define SHAPE_ITEM 2   /* 8x4 low in the tile: item drops */
-
-struct mark {
-    unsigned char x;
-    unsigned char y;
-    unsigned char color;
-    unsigned char shape;
-};
+#define MAX_STALE 4
 
 struct cell {
     unsigned char x;
     unsigned char y;
 };
 
-static const unsigned shape_offset[3] = { 4 * 256 + 2, 6 * 256 + 3, 11 * 256 + 2 };
-static const unsigned char shape_lines[3] = { 8, 4, 4 };
-static const unsigned char shape_words[3] = { 2, 1, 2 };
-
 /* What one ring shows: it lags the other by a step, so each keeps its own
- * record. Only cells whose markers changed are repainted. */
+ * record. Only cells whose markers or terrain changed are repainted. */
 struct ring {
     unsigned char base;
     unsigned char have;              /* painted at least once since hw_init */
     unsigned vx, vy;                 /* view it last showed */
-    unsigned char painted[RING_ROWS * 16]; /* cell colors, two per byte */
-    struct mark marks[MAX_MARKS];
+    struct sprite marks[MAX_SPRITES];
     unsigned char nmarks;
     unsigned hud_line;               /* where its HUD was stamped */
     unsigned char hud_hoff;
     unsigned char hud_stale;         /* HUD text changed since stamped */
-    unsigned char tiles_stale;       /* terrain changed since painted */
+    unsigned char nstale;            /* terrain changed here; > MAX_STALE: all */
+    struct cell stale[MAX_STALE];
 };
 
 static struct ring rings[2];
 static struct ring *cur;             /* the hidden ring being painted */
 static unsigned char front;          /* index of the ring on screen */
-static struct mark next[MAX_MARKS];
+static struct sprite next[MAX_SPRITES];
 static struct cell dirty[MAX_DIRTY];
 static unsigned char nnext;
 static unsigned char ndirty;
 static unsigned char dirty_overflow;
-
-/* Fills one 16x16 tile at dst, 8 bytes wide with 256-byte rows. Inside the
- * GFX bracket. */
-static void fill_tile256(unsigned char *dst, unsigned fill16)
-{
-    asm {
-        ldx :dst
-        ldd :fill16
-        std ,x
-        std 2,x
-        std 4,x
-        std 6,x
-        leax 256,x
-        std ,x
-        std 2,x
-        std 4,x
-        std 6,x
-        leax 256,x
-        std ,x
-        std 2,x
-        std 4,x
-        std 6,x
-        leax 256,x
-        std ,x
-        std 2,x
-        std 4,x
-        std 6,x
-        leax 256,x
-        std ,x
-        std 2,x
-        std 4,x
-        std 6,x
-        leax 256,x
-        std ,x
-        std 2,x
-        std 4,x
-        std 6,x
-        leax 256,x
-        std ,x
-        std 2,x
-        std 4,x
-        std 6,x
-        leax 256,x
-        std ,x
-        std 2,x
-        std 4,x
-        std 6,x
-        leax 256,x
-        std ,x
-        std 2,x
-        std 4,x
-        std 6,x
-        leax 256,x
-        std ,x
-        std 2,x
-        std 4,x
-        std 6,x
-        leax 256,x
-        std ,x
-        std 2,x
-        std 4,x
-        std 6,x
-        leax 256,x
-        std ,x
-        std 2,x
-        std 4,x
-        std 6,x
-        leax 256,x
-        std ,x
-        std 2,x
-        std 4,x
-        std 6,x
-        leax 256,x
-        std ,x
-        std 2,x
-        std 4,x
-        std 6,x
-        leax 256,x
-        std ,x
-        std 2,x
-        std 4,x
-        std 6,x
-        leax 256,x
-        std ,x
-        std 2,x
-        std 4,x
-        std 6,x
-    }
-}
 
 /* Each 8K block holds 32 lines, and a tile row (16 lines) never straddles a
  * block, so painting a tile or a line needs exactly one window mapping. */
@@ -163,43 +61,20 @@ static void map_block(unsigned line)
     *(unsigned char *)0xFFAC = (unsigned char)(cur->base + (line >> 5));
 }
 
-static unsigned char painted_get(unsigned char row, unsigned char col)
-{
-    unsigned char b = cur->painted[(unsigned char)(row << 4) | (col >> 1)];
-
-    if (col & 1) {
-        return (unsigned char)(b & 0x0F);
-    }
-    return (unsigned char)(b >> 4);
-}
-
-static void painted_set(unsigned char row, unsigned char col,
-                        unsigned char color)
-{
-    unsigned char *p = &cur->painted[(unsigned char)(row << 4) | (col >> 1)];
-
-    if (col & 1) {
-        *p = (unsigned char)((*p & 0xF0) | color);
-    } else {
-        *p = (unsigned char)((*p & 0x0F) | (color << 4));
-    }
-}
-
-static void put_tile(unsigned line, unsigned char col, unsigned fill16)
+/* The art is in slot 5, beside the ring block in slot 4. */
+static void put_tile(unsigned line, unsigned char col, unsigned char id)
 {
     map_block(line);
+    *(unsigned char *)0xFFAD = ART_BLOCK;
     GFX_ENTER();
-    fill_tile256(GFX_WINDOW + (line & 31) * 256 + col * (TILE_W / 2), fill16);
+    copy_tile(GFX_WINDOW + (line & 31) * 256 + col * (TILE_W / 2),
+              ART_TILE_IMAGE(GFX_WINDOW + 0x2000, id), 256);
     GFX_LEAVE();
 }
 
-static unsigned fill_word(unsigned char color)
-{
-    return (unsigned)((color << 4) | color) * 0x0101U;
-}
-
-static unsigned char tile_color(const unsigned char *terrain, unsigned ox,
-                                unsigned oy, unsigned wx, unsigned wy)
+/* Cells outside the cached window draw as grass. */
+static unsigned char tile_id(const unsigned char *terrain, unsigned ox,
+                             unsigned oy, unsigned wx, unsigned wy)
 {
     unsigned rx = wx - ox;
     unsigned ry = wy - oy;
@@ -207,20 +82,18 @@ static unsigned char tile_color(const unsigned char *terrain, unsigned ox,
     if (rx >= BOOTSTRAP_WINDOW_W || ry >= BOOTSTRAP_WINDOW_H) {
         return 0;
     }
-    return terrain[ry * BOOTSTRAP_WINDOW_W + rx] & 0x0F;
+    return terrain[ry * BOOTSTRAP_WINDOW_W + rx];
 }
 
-static void paint_tile(unsigned wx, unsigned wy, unsigned char color)
+static void paint_tile(unsigned wx, unsigned wy, unsigned char id)
 {
     unsigned char row = (unsigned char)(wy % RING_ROWS);
     unsigned char col = (unsigned char)(wx & 31);
     unsigned line = (unsigned)row * TILE_H;
-    unsigned fill16 = fill_word(color);
 
-    painted_set(row, col, color);
-    put_tile(line, col, fill16);
+    put_tile(line, col, id);
     if (row < MIRROR_ROWS) {
-        put_tile(line + RING_LINES, col, fill16);
+        put_tile(line + RING_LINES, col, id);
     }
 }
 
@@ -324,65 +197,33 @@ void hw_hud_refresh(void)
     rings[1].hud_stale = 1;
 }
 
-static void draw_mark(const struct mark *m)
+static void draw_mark(const struct sprite *m)
 {
     unsigned char row = (unsigned char)(m->y % RING_ROWS);
-    unsigned char col = (unsigned char)(m->x & 31);
-    unsigned fill16 = fill_word(m->color);
-    unsigned offset = shape_offset[m->shape];
-    unsigned char lines = shape_lines[m->shape];
-    unsigned char words = shape_words[m->shape];
-    unsigned line;
-    unsigned char *dst;
-    unsigned char r;
-    unsigned char pass;
+    unsigned line = (unsigned)row * TILE_H;
 
-    for (pass = 0; pass < 2; ++pass) {
-        if (pass == 1 && row >= MIRROR_ROWS) {
+    for (;;) {
+        map_block(line);
+        *(unsigned char *)0xFFAD = ART_BLOCK;
+        GFX_ENTER();
+        put_sprite(GFX_WINDOW + (line & 31) * 256 + (m->x & 31) * (TILE_W / 2),
+                   GFX_WINDOW + 0x2000, m->img, 256);
+        GFX_LEAVE();
+        if (row >= MIRROR_ROWS || line >= RING_LINES) {
             break;
         }
-        line = (unsigned)row * TILE_H;
-        if (pass) {
-            line += RING_LINES; /* not `pass ? 240 : 0`: CMOC sign-extends the 240 */
-        }
-        map_block(line);
-        GFX_ENTER();
-        dst = GFX_WINDOW + (line & 31) * 256 + col * (TILE_W / 2) + offset;
-        for (r = 0; r < lines; ++r) {
-            *(unsigned *)dst = fill16;
-            if (words == 2) {
-                *(unsigned *)(dst + 2) = fill16;
-            }
-            dst += 256;
-        }
-        GFX_LEAVE();
+        line += RING_LINES;
     }
 }
 
-static void add_mark(unsigned vx, unsigned vy, unsigned char x, unsigned char y,
-                     unsigned char color, unsigned char shape)
-{
-    struct mark *m;
-
-    if ((unsigned)x - vx >= VIEW_COLS || (unsigned)y - vy >= VIEW_ROWS ||
-        nnext >= MAX_MARKS) {
-        return;
-    }
-    m = &next[nnext++];
-    m->x = x;
-    m->y = y;
-    m->color = color;
-    m->shape = shape;
-}
-
-static unsigned char has_mark(const struct mark *list, unsigned char n,
-                              const struct mark *m)
+static unsigned char has_mark(const struct sprite *list, unsigned char n,
+                              const struct sprite *m)
 {
     unsigned char i;
 
     for (i = 0; i < n; ++i) {
         if (list[i].x == m->x && list[i].y == m->y &&
-            list[i].color == m->color && list[i].shape == m->shape) {
+            list[i].img == m->img) {
             return 1;
         }
     }
@@ -466,37 +307,28 @@ static void paint_view(const unsigned char *terrain, unsigned ox, unsigned oy,
                 wy - cur->vy < VIEW_ROWS) {
                 continue;
             }
-            paint_tile(wx, wy, tile_color(terrain, ox, oy, wx, wy));
+            paint_tile(wx, wy, tile_id(terrain, ox, oy, wx, wy));
         }
     }
 }
 
-/* Repaints visible cells whose terrain color differs from what was painted. */
-static void paint_changed(const unsigned char *terrain, unsigned ox,
-                          unsigned oy, unsigned vx, unsigned vy)
+/* Queues st's changed terrain cells for r to repaint. */
+static void add_stale(struct ring *r, const struct rt_state *st)
 {
-    unsigned char row, col;
-    unsigned wy;
-    unsigned char color;
-    const unsigned char *src;
-    unsigned char ring_row;
+    unsigned char i;
 
-    if (vx - ox > BOOTSTRAP_WINDOW_W - VIEW_COLS ||
-        vy - oy > BOOTSTRAP_WINDOW_H - VIEW_ROWS) {
+    if (st->changed_n > RTS_MAX_CHANGED) {
+        r->nstale = MAX_STALE + 1;
         return;
     }
-    for (row = 0; row < VIEW_ROWS; ++row) {
-        controls_poll();
-        wy = vy + row;
-        src = terrain + (wy - oy) * BOOTSTRAP_WINDOW_W + (vx - ox);
-        ring_row = (unsigned char)(wy % RING_ROWS);
-        for (col = 0; col < VIEW_COLS; ++col) {
-            color = src[col] & 0x0F;
-            if (painted_get(ring_row, (unsigned char)((vx + col) & 31)) != color) {
-                paint_tile(vx + col, wy, color);
-                add_dirty((unsigned char)(vx + col), (unsigned char)wy);
-            }
+    for (i = 0; i < st->changed_n; ++i) {
+        if (r->nstale >= MAX_STALE) {
+            r->nstale = MAX_STALE + 1;
+            return;
         }
+        r->stale[r->nstale].x = st->changed_x[i];
+        r->stale[r->nstale].y = st->changed_y[i];
+        ++r->nstale;
     }
 }
 
@@ -516,7 +348,8 @@ static void paint_ring(const unsigned char *terrain, unsigned ox, unsigned oy,
     cur = &rings[front ^ 1];
     ddx = (int)(vx - cur->vx);
     ddy = (int)(vy - cur->vy);
-    if (full || !cur->have || ddx >= VIEW_COLS || ddx <= -VIEW_COLS ||
+    if (full || !cur->have || cur->nstale > MAX_STALE ||
+        ddx >= VIEW_COLS || ddx <= -VIEW_COLS ||
         ddy >= VIEW_ROWS || ddy <= -VIEW_ROWS) {
         paint_view(terrain, ox, oy, vx, vy, 0);
         for (i = 0; i < nnext; ++i) {
@@ -537,15 +370,22 @@ static void paint_ring(const unsigned char *terrain, unsigned ox, unsigned oy,
             }
         }
         paint_view(terrain, ox, oy, vx, vy, 1);
-        if (cur->tiles_stale) {
-            paint_changed(terrain, ox, oy, vx, vy);
+        for (i = 0; i < cur->nstale; ++i) {
+            add_dirty(cur->stale[i].x, cur->stale[i].y);
         }
         if (dirty_overflow) {
+            for (i = 0; i < cur->nstale; ++i) {
+                x = cur->stale[i].x;
+                y = cur->stale[i].y;
+                if ((unsigned)x - vx < VIEW_COLS && (unsigned)y - vy < VIEW_ROWS) {
+                    paint_tile(x, y, tile_id(terrain, ox, oy, x, y));
+                }
+            }
             for (i = 0; i < cur->nmarks; ++i) {
                 x = cur->marks[i].x;
                 y = cur->marks[i].y;
                 if ((unsigned)x - vx < VIEW_COLS && (unsigned)y - vy < VIEW_ROWS) {
-                    paint_tile(x, y, tile_color(terrain, ox, oy, x, y));
+                    paint_tile(x, y, tile_id(terrain, ox, oy, x, y));
                 }
             }
             for (i = 0; i < nnext; ++i) {
@@ -556,7 +396,7 @@ static void paint_ring(const unsigned char *terrain, unsigned ox, unsigned oy,
                 x = dirty[i].x;
                 y = dirty[i].y;
                 if ((unsigned)x - vx < VIEW_COLS && (unsigned)y - vy < VIEW_ROWS) {
-                    paint_tile(x, y, tile_color(terrain, ox, oy, x, y));
+                    paint_tile(x, y, tile_id(terrain, ox, oy, x, y));
                     draw_cell_marks(x, y);
                 }
             }
@@ -573,8 +413,8 @@ static void paint_ring(const unsigned char *terrain, unsigned ox, unsigned oy,
     cur->hud_line = line;
     cur->hud_hoff = hoff;
     cur->hud_stale = 0;
-    cur->tiles_stale = 0;
-    memcpy(cur->marks, next, sizeof(struct mark) * nnext);
+    cur->nstale = 0;
+    memcpy(cur->marks, next, sizeof(struct sprite) * nnext);
     cur->nmarks = nnext;
 
     set_scroll(vx, vy);
@@ -585,42 +425,11 @@ void hw_present(const unsigned char *terrain, unsigned ox, unsigned oy,
                 unsigned vx, unsigned vy, unsigned char px, unsigned char py,
                 const struct rt_state *st, unsigned char mode)
 {
-    unsigned char i;
-
     if (mode == HW_PRESENT_TILES) {
-        rings[0].tiles_stale = 1;
-        rings[1].tiles_stale = 1;
+        add_stale(&rings[0], st);
+        add_stale(&rings[1], st);
     }
-    nnext = 0;
-    for (i = 0; i < st->item_count; ++i) {
-        if (st->items[i].item_id != 0) {
-            add_mark(vx, vy, st->items[i].x, st->items[i].y,
-                     item_mark_color(st->items[i].item_id), SHAPE_ITEM);
-        }
-    }
-    for (i = 0; i < st->beaver_count; ++i) {
-        if (st->beavers[i].hp != 0 && !(st->beavers[i].hit_timer & 1)) {
-            add_mark(vx, vy, st->beavers[i].x, st->beavers[i].y,
-                     st->beavers[i].kind >= RTS_KIND_WILHELM ? MARK_NPC
-                                                              : MARK_ENEMY,
-                     SHAPE_MARKER);
-        }
-    }
-    for (i = 0; i < st->remote_count; ++i) {
-        if (st->remotes[i].state & RTS_REMOTE_ALIVE) {
-            add_mark(vx, vy, st->remotes[i].x, st->remotes[i].y, MARK_REMOTE,
-                     SHAPE_MARKER);
-        }
-    }
-    if (st->world_seen && !(player_hit_timer & 1)) {
-        add_mark(vx, vy, px, py, MARK_PLAYER, SHAPE_MARKER);
-    }
-    for (i = 0; i < RTS_MAX_TRACERS; ++i) {
-        if (st->tracers[i].active) {
-            add_mark(vx, vy, st->tracers[i].x, st->tracers[i].y, MARK_BULLET,
-                     SHAPE_BULLET);
-        }
-    }
+    nnext = sprites_build(next, st, vx, vy, px, py, live_facing);
 
     paint_ring(terrain, ox, oy, vx, vy, mode == HW_PRESENT_FULL);
     /* A full repaint does both rings, so the next step is not a full one. */

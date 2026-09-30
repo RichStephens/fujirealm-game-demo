@@ -9,8 +9,8 @@
 #define GLYPH_BYTES 8
 #define FONT 0xF09DU /* RAM copy of the HPRINT font: chars 32-127, 8 bytes each */
 
-#define HUD_TEXT_COLOR MARK_PLAYER /* white in every palette */
-#define HUD_HEART_COLOR MARK_ENEMY /* red in every palette */
+#define HUD_TEXT_COLOR 3  /* white in every palette */
+#define HUD_HEART_COLOR 11 /* red in every palette */
 #define HUD_HEART 0x80
 
 /* Atari HUD line-1 layout (fujirealm.asm HUD_*_X). */
@@ -29,7 +29,7 @@
 #define MESSAGE_TIMEOUT_TICKS 1800
 #define NOTE_TICKS 120
 #define WALK_X 32
-#define NOTE_X 35 /* a note briefly replaces the 2-character mode */
+#define NOTE_X 35
 #define QUEST_DONE_TIMEOUT_TICKS 600
 
 static const unsigned char text_y[HUD_ROWS] = { 3, 13, 23 };
@@ -48,7 +48,6 @@ static const char *note_text;
 static unsigned note_clk;
 static unsigned char note_on;
 static unsigned char status_walk;
-static const char *status_mode;
 static unsigned quest_clk;
 
 void gfx_copy8(unsigned char *dst, const unsigned char *src,
@@ -212,8 +211,6 @@ static unsigned char put_stats(void)
     line[WALK_X + 1] = (char)('0' + status_walk);
     if (note_on) {
         memcpy(&line[NOTE_X], note_text, 3);
-    } else if (status_mode) {
-        memcpy(&line[NOTE_X], status_mode, 2);
     }
     return put_line(ROW_STATS, line);
 }
@@ -226,11 +223,10 @@ void hud_note(const char *text, unsigned now)
     stats_valid = 0;
 }
 
-void hud_set_status(unsigned char walk, const char *mode)
+void hud_set_walk(unsigned char walk)
 {
-    if (walk != status_walk || mode != status_mode) {
+    if (walk != status_walk) {
         status_walk = walk;
-        status_mode = mode;
         stats_valid = 0;
     }
 }

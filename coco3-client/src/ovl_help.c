@@ -62,9 +62,6 @@ static void show_help(const struct ovl_api *api)
     api->text(6, 12, "V - Walk speed");
     api->text(6, 13, "F1 - RGB/composite");
     api->text(6, 14, "BREAK - Exit to BASIC");
-    if (api->is_512k) {
-        api->text(6, 15, "CLEAR - Scrolling mode HW/SW");
-    }
     api->text(4, 21, "Press ENTER or fire to continue");
     api->show();
     wait_close(api);
@@ -78,11 +75,11 @@ static void show_help(const struct ovl_api *api)
 #define ZONE_LINES 16
 #define FONT ((const unsigned char *)0xF09D) /* ROM font copy, chars 32-127 */
 
-/* Palette slots (palette.c overworld roles). */
+/* Palette slots (palette.c roles, the same in every area). */
 #define C_BLACK 0
 #define C_GRAY 2
+#define C_BLUE 12
 #define C_YELLOW 14
-#define C_GREEN 15
 
 static void fill(unsigned char x, unsigned char y, unsigned char w,
                  unsigned char h, unsigned char color)
@@ -141,7 +138,7 @@ static char zone_look(unsigned char cell, unsigned char *color)
     case RTS_MAP_MARKER_TOWN:
         return 'T';
     }
-    *color = (cell & RTS_MAP_CELL_VISITED) ? C_GREEN : C_BLACK;
+    *color = (cell & RTS_MAP_CELL_VISITED) ? C_BLUE : C_BLACK;
     return 0;
 }
 
