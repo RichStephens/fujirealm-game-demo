@@ -1,0 +1,12 @@
+# Copy to config.mk (untracked) to bake your own server in without passing
+# the variables on every build. Same variable names the other FujiRealm
+# clients take.
+#
+#   cp config.mk.example config.mk
+#
+# Baked in as the compiled-in default (src/server_host_default.h) -- an
+# appkey override (key_id 3) still wins at runtime if one is saved.
+
+SERVER_HOST = 192.168.1.100
+HYBRID_SERVER_PORT = 9000
+LOGIN_SERVER_PORT = 9010

@@ -1,9 +1,10 @@
 # FujiRealm
 
-A small server-authoritative multiplayer RPG for 8-bit Atari hardware, playing  
-over [FujiNet](https://fujinet.online). One Python server, two clients; an  
-**Atari 8-bit** client in 6502 assembly and an **Atari Lynx** client in C, both  
-speaking the same wire protocol to the same live world.
+A small server-authoritative multiplayer RPG for retro hardware, playing over  
+[FujiNet](https://fujinet.online). One Python server and five clients: **Atari**  
+**8-bit** in 6502 assembly, **Atari Lynx** in C, **Intellivision** in IntyBASIC,  
+**Tandy CoCo 3** and **Amiga** in C, all speaking the same wire protocol to the  
+same live world.
 
 If you want to build a networked game for retro hardware  
 and you are staring at a blank file wondering how any of this fits together,  
@@ -18,17 +19,34 @@ licensed precisely so you can lift whatever is useful.
                     │  hybrid_server.py    │  10 Hz tick, no game
                     └──────────┬───────────┘  logic in the clients
                      TCP       │       TCP
+              ┌────────────────┼────────────────┐
+     ┌────────┴─────────┐      │      ┌─────────┴────────┐
+     │  FujiNet (SIO)   │      │      │FujiNet (ComLynx) │
+     │   POKEY serial   │      │      │    Mikey UART    │
+     └────────┬─────────┘      │      └─────────┬────────┘
+     ┌────────┴─────────┐      │      ┌─────────┴────────┐
+     │ Atari 800/XL/XE  │      │      │    Atari Lynx    │
+     │  MADS assembly   │      │      │     cc65 / C     │
+     │  ANTIC 4 tiles   │      │      │   Suzy sprites   │
+     └──────────────────┘      │      └──────────────────┘
               ┌────────────────┴────────────────┐
-              │                                 │
      ┌────────┴─────────┐             ┌─────────┴────────┐
-     │  FujiNet (SIO)   │             │ FujiNet (ComLynx)│
-     │  POKEY serial    │             │   Mikey UART     │
+     │ FujiNet mailbox  │             │     FujiNet      │
+     │  PiRTO II cart   │             │    DriveWire     │
      └────────┬─────────┘             └─────────┬────────┘
      ┌────────┴─────────┐             ┌─────────┴────────┐
-     │  Atari 800/XL/XE │             │    Atari Lynx    │
-     │  MADS assembly   │             │   cc65 / C       │
-     │  ANTIC 4 tiles   │             │   Suzy sprites   │
+     │  Intellivision   │             │   Tandy CoCo 3   │
+     │    IntyBASIC     │             │     CMOC / C     │
+     │    GRAM cards    │             │  GIME scrolling  │
      └──────────────────┘             └──────────────────┘
+     ┌──────────────────┐
+     │   FujiNet NIO    │
+     └────────┬─────────┘
+     ┌────────┴─────────┐
+     │      Amiga       │
+     │  m68k gcc / C    │
+     │  Blitter masks   │
+     └──────────────────┘
 ```
 
 ## What's in the box
@@ -38,12 +56,14 @@ licensed precisely so you can lift whatever is useful.
 | `server/`        | The authoritative game server: world, entities, quests, combat, persistence, and the realtime protocol. Pure Python 3, standard library only. |
 | `atari8-client/` | Atari 8-bit client. MADS assembly, ANTIC mode 4, 2×2 tiles, talks to FujiNet over POKEY serial via a vendored Netstream handler.              |
 | `lynx-client/`   | Atari Lynx client. cc65 C with a little assembly, Suzy sprite renderer, talks to FujiNet over ComLynx.                                        |
+| `intv-client/`   | Intellivision client. IntyBASIC, GRAM card tiles, talks to the Intellivision FujiNet (PiRTO II) through its mailbox. See its README.          |
+| `coco3-client/`  | Tandy CoCo 3 client. CMOC C, GIME hardware scrolling, FujiNet over DriveWire. See its README.                                                 |
 | `amiga-client/`  | Amiga client (Workbench 1.3+, 68000). m68k gcc C, shares the Lynx client's protocol code, talks to FujiNet over FujiNet NIO. |
-| `tools/`         | Shared build and art tooling, plus `tile-editor/`, the browser tile editor that both clients' art comes from.                                 |
+| `tools/`         | Shared build and art tooling, plus `tile-editor/`, the browser tile editor for the clients' art.                                             |
 | `maps/`          | The world as editable CSV grids. `tools/import_map_csv.py` compiles them into the server.                                                     |
 | `docs/`          | The wire protocol, the Atari memory map, and the shared tile-id contract.                                                                     |
 
-The two clients share the **server**, the **protocol**, and the **logical tile**  
+The clients share the **server**, the **protocol**, and the **logical tile**  
 **ids**. Everything else (renderer, transport driver, input, memory layout) is  
 per-machine, and the differences are the interesting part.
 
@@ -54,26 +74,33 @@ per-machine, and the differences are the interesting part.
 | `python3` (3.10+)                   | server, tools             | always                  |
 | [`mads`](https://mads.atari8.info/) | Atari 8-bit client        | to build the XEX        |
 | [`cc65`](https://cc65.github.io/)   | Lynx client               | to build the cart       |
+| `intybasic`, `as1600`               | Intellivision client      | to build the ROM        |
+| `cmoc`, `decb` (via `defoogi`)      | CoCo 3 client             | to build the disk       |
+| `m68k-amigaos-gcc`                  | Amiga client              | to build the program    |
 | `dir2atr` (AtariSIO)                | bootable disk image       | `make atr` only         |
 | `gcc`/`cc`                          | Lynx host tests           | `make test` only        |
 | `node`                              | tile editor tests         | `make test-editor` only |
 | Pillow                              | Lynx art previews/mockups | optional                |
 
-To actually play you need FujiNet hardware: a FujiNet for the Atari 8-bit, or a  
-FujiNet-Lynx plus a flashcart for the Lynx. There is no FujiNet-capable Lynx  
+To actually play you need FujiNet hardware: a FujiNet for the Atari 8-bit, a  
+FujiNet-Lynx plus a flashcart for the Lynx, an Intellivision FujiNet, a CoCo  
+FujiNet, or an Amiga with FujiNet NIO. There is no FujiNet-capable Lynx  
 emulator (yet), so Lynx changes are validated on real hardware.
 
 ## Build
 
 ```sh
-make            # both clients
-make atari      # Atari 8-bit only  -> atari8-client/fujirealm.xex
-make lynx       # Lynx only         -> lynx-client/fujirealm.lnx
-make atr        # bootable disk     -> atari8-client/fujirealm.atr
+make                  # Atari and Lynx
+make atari            # Atari 8-bit only  -> atari8-client/fujirealm.xex
+make lynx             # Lynx only         -> lynx-client/fujirealm.lnx
+make atr              # bootable disk     -> atari8-client/fujirealm.atr
+make -C intv-client   # Intellivision     -> intv-client/fujirealm.bin/.cfg/.rom
+defoogi make coco     # CoCo 3            -> coco3-client/FUJIRLM3.dsk
+make -C amiga-client  # Amiga             -> amiga-client/build/FujiRealm
 make clean
 ```
 
-Both clients bake their server address in at build time, using the same  
+Every client bakes its server address in at build time, using the same  
 variable names:
 
 ```sh
@@ -82,13 +109,15 @@ make SERVER_HOST=myhost.local HYBRID_SERVER_PORT=9000 LOGIN_SERVER_PORT=9010
 ```
 
 The default is `localhost`, which is only useful for emulator/host testing, a  
-real Atari or Lynx cannot reach it, so **build with your own `SERVER_HOST**`  
+real machine cannot reach it, so **build with your own `SERVER_HOST**`  
 **before flashing anything**. Each build prints the endpoint it baked in. To  
 avoid passing it every time:
 
 ```sh
 cp atari8-client/config.mk.example atari8-client/config.mk   # then edit
 cp lynx-client/config.mk.example  lynx-client/config.mk
+cp intv-client/config.mk.example  intv-client/config.mk
+cp coco3-client/config.mk.example coco3-client/config.mk
 ```
 
 `config.mk` is git-ignored. Changing the host forces a relink rather than  
@@ -96,7 +125,7 @@ silently leaving the old address in the binary. `SERVER_HOST` is limited to 31
 characters; the Lynx client checks that at compile time.
 
 The Atari client draws the local player with Player/Missile graphics: three  
-sprite colours that cost nothing from the four playfield colours, a sprite  
+sprite colors that cost nothing from the four playfield colors, a sprite  
 taller than its tile, and pixel-smooth movement between tiles. Bullets ride the  
 four missiles. All of it lives in otherwise-unused RAM at `$A000-$BFFF`, so it  
 needs BASIC disabled, which the `.atr` boot does. To fall back to the original  
@@ -132,7 +161,7 @@ make run-bootstrap-server    # byte-stream-only server, bootstrap protocol alone
 `server/stats.php` is a single self-contained page: a PvP leaderboard read from  
 `sessions.json`, and a world map showing where online players are.
 
-The map draws one coloured pixel per tile from `server/map_data.json`, which is  
+The map draws one colored pixel per tile from `server/map_data.json`, which is  
 generated from the server's own world builders so the page can never disagree  
 with what players walk on:
 
@@ -165,7 +194,7 @@ Only online players are drawn — never enemies or NPCs.
 ## Test
 
 ```sh
-make test            # server + tools + Lynx host tests
+make test            # server + tools + Lynx host tests + Intellivision art check
 make test-server     # the server suite on its own
 make test-lynx       # Lynx host tests, render tests, and lint
 make test-editor     # tile editor model tests (needs node)
@@ -182,9 +211,11 @@ the host, which is what makes a machine with no emulator tractable to work on.
 ```
 tile-editor/index.html  →  atari8-client/art/fujirealm_charsetter.json  →  make atari
 tile-editor/lynx.html   →  lynx-client/art/lynx_tileset.json            →  make -C lynx-client art
+tile-editor/intv.html   →  intv-client/art/intv_cards.json              →  make -C intv-client art
+tile-editor/coco.html   →  coco3-client/art/coco_tileset.json           →  defoogi make coco
 ```
 
-Both clients draw from the same set of logical tile ids, and the server streams  
+The clients draw from the same set of logical tile ids, and the server streams  
 those ids, the id contract is `docs/TILE_ALLOCATION.md`. See  
 `tools/tile-editor/README.md` for the workflow, including the Lynx's pen-0  
 transparency rules.
@@ -221,7 +252,9 @@ it; attribution in your source is all that is asked.
 850 firmware by **Avery Lee**.
 - The tile editor is built on **[Charsetter](https://www.atari.org.pl/charsetter/)**  
 by Dely, used with their kind permission — thank you!
-- The Lynx client is built with **cc65**; the Atari client with **MADS**.
+- The Lynx client is built with **cc65**; the Atari client with **MADS**; the  
+Intellivision client with **IntyBASIC**; the CoCo 3 client with **CMOC**; the  
+Amiga client with **m68k-amigaos-gcc**.
 - None of this exists without **[FujiNet](https://fujinet.online)**.
 
 Full details, and what each asks of you if you redistribute, are in  
