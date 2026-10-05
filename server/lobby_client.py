@@ -17,8 +17,7 @@ class LobbyConfig:
     region: str
     server_url: str
     max_players: int
-    client_platform: str
-    client_url: str
+    clients: tuple[tuple[str, str], ...]
     timeout: float = 2.0
 
     @property
@@ -36,10 +35,8 @@ class LobbyConfig:
             "maxplayers": self.max_players,
             "curplayers": curplayers,
             "clients": [
-                {
-                    "platform": self.client_platform,
-                    "url": self.client_url,
-                }
+                {"platform": platform, "url": url}
+                for platform, url in self.clients
             ],
         }
 

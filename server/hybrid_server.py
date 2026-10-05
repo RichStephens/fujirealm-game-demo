@@ -275,6 +275,17 @@ DEFAULT_LOBBY_SERVER_URL = "tcp://fujinet.online:9010"
 DEFAULT_LOBBY_MAX_PLAYERS = 32
 DEFAULT_LOBBY_CLIENT_PLATFORM = "atari"
 DEFAULT_LOBBY_CLIENT_URL = "TNFS://tnfs.fujinet.online/ATARI/netgames/fujirealm.atr"
+
+
+def parse_lobby_client(value: str) -> tuple[str, str]:
+    platform, separator, url = value.partition("=")
+    platform = platform.strip()
+    url = url.strip()
+    if not separator or not platform or not url:
+        raise argparse.ArgumentTypeError("expected PLATFORM=URL with both values nonempty")
+    return platform, url
+
+
 DEFAULT_GAME_SEED = 1
 AUTH_TIMEOUT_CHURN_THRESHOLD = 2
 # Bound on the per-host auth-timeout diagnostic counters: internet bots
@@ -469,6 +480,7 @@ class FujiRealmHybridServer:
         lobby_max_players: int = DEFAULT_LOBBY_MAX_PLAYERS,
         lobby_client_platform: str = DEFAULT_LOBBY_CLIENT_PLATFORM,
         lobby_client_url: str = DEFAULT_LOBBY_CLIENT_URL,
+        lobby_clients: tuple[tuple[str, str], ...] = (),
         lobby_timeout: float = 2.0,
         lobby_publisher: LobbyPublisher | None = None,
         positions_file: str | None = None,
@@ -548,6 +560,8 @@ class FujiRealmHybridServer:
         if lobby_publisher is not None:
             self.lobby = lobby_publisher
         elif lobby_enabled:
+            clients = {lobby_client_platform: lobby_client_url}
+            clients.update(lobby_clients)
             self.lobby = LobbyPublisher(
                 LobbyConfig(
                     base_url=lobby_base_url,
@@ -558,8 +572,7 @@ class FujiRealmHybridServer:
                     region=lobby_region,
                     server_url=lobby_server_url,
                     max_players=lobby_max_players,
-                    client_platform=lobby_client_platform,
-                    client_url=lobby_client_url,
+                    clients=tuple(clients.items()),
                     timeout=lobby_timeout,
                 ),
                 self._log_error,
@@ -1800,6 +1813,14 @@ def main() -> int:
     parser.add_argument("--lobby-max-players", type=int, default=DEFAULT_LOBBY_MAX_PLAYERS)
     parser.add_argument("--lobby-client-platform", default=DEFAULT_LOBBY_CLIENT_PLATFORM)
     parser.add_argument("--lobby-client-url", default=DEFAULT_LOBBY_CLIENT_URL)
+    parser.add_argument(
+        "--lobby-client",
+        action="append",
+        type=parse_lobby_client,
+        metavar="PLATFORM=URL",
+        default=[],
+        help="advertise another client; repeat for each platform (overrides the default for the same platform)",
+    )
     parser.add_argument("--lobby-timeout", type=float, default=2.0)
     parser.add_argument("--lobby-delete-only", action="store_true")
     args = parser.parse_args()
@@ -1839,6 +1860,7 @@ def main() -> int:
         lobby_max_players=args.lobby_max_players,
         lobby_client_platform=args.lobby_client_platform,
         lobby_client_url=args.lobby_client_url,
+        lobby_clients=tuple(args.lobby_client),
         lobby_timeout=args.lobby_timeout,
     )
     if args.lobby_delete_only:

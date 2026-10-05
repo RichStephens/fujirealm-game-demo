@@ -191,6 +191,24 @@ or whatever your web root symlinks to).
 
 Only online players are drawn — never enemies or NPCs.
 
+To register the server and its client downloads with the FujiNet lobby, enable
+the lobby and repeat `--lobby-client` for each additional platform:
+
+```sh
+python3 -m server.hybrid_server --lobby-enabled \
+  --lobby-client intv=TNFS://your-host/Intellivision/fujirealm.rom \
+  --lobby-client coco=TNFS://your-host/CoCo/FUJIRLM3.dsk
+```
+
+The Atari client is advertised by default. Each added platform appears in the
+registration and player-count updates; repeating a platform replaces its
+earlier URL. The existing `--lobby-client-platform` and `--lobby-client-url`
+options still set the default entry. On shutdown, the lobby removes the whole
+server listing by its server URL. Replace the example download URLs with
+published bootable images before using them. For Intellivision, the build also
+produces a `.bin` plus `.cfg` pair; the `.cfg` supplies the memory map for the
+`.bin`. The `.rom` output includes that information in one file.
+
 ## Test
 
 ```sh
